@@ -174,17 +174,27 @@ table(tree.pred, High.test)
 Here we fit a regression tree to the `Heart and Hitter's`  data set. First, we create a training set, and fit the tree to the training data.
 
 ```{r chunk14}
+#heart training
 set.seed(1)
-train <- sample(1:nrow(Boston), nrow(Boston) / 2)
-tree.boston <- tree(medv ~ ., Boston, subset = train)
-summary(tree.boston)
-```
+train_heart <- sample(1:nrow(Heart), nrow(Heart) / 2)
+tree.heart <- tree(Age ~ ., Heart, subset = train_heart)
+summary(tree.heart)
 
+#hitters training
+set.seed(1)
+train_hitters <- sample(1:nrow(Hitters), nrow(Hitters) / 2)
+tree.hitters <- tree(AtBat ~ ., Hitters, subset = train_hitters)
+summary(tree.hitters)
+```
 Notice that the output of `summary()` indicates that only four of the variables have been used in constructing the tree. In the context of a regression tree, the deviance is simply the sum of squared errors for the tree. We now plot the tree.
 
 ```{r chunk15}
-plot(tree.boston)
-text(tree.boston, pretty = 0)
+plot(tree.heart)
+text(tree.heart, pretty = 0)
+
+plot(tree.hitters)
+text(tree.hitters, pretty = 0)
+
 ```
 
 The variable `lstat` measures the percentage of individuals with {lower  socioeconomic status}, while the variable `rm` corresponds to the average number of rooms. The tree indicates that larger values of `rm`, or lower values of `lstat`, correspond to more expensive houses. For example, the tree predicts a median house price of $$45{,}400$ for homes in census tracts in which `rm >= 7.553`.
@@ -196,26 +206,39 @@ passing `control = tree.control(nobs = length(train), mindev = 0)` into the `tre
 Now we use the `cv.tree()` function to see whether pruning the tree will improve performance.
 
 ```{r chunk16}
-cv.boston <- cv.tree(tree.boston)
-plot(cv.boston$size, cv.boston$dev, type = "b")
+cv.heart <- cv.tree(tree.heart)
+plot(cv.heart$size, cv.heart$dev, type = "b")
+
+cv.hitters <- cv.tree(tree.hitters)
+plot(cv.hitters$size, cv.hitters$dev, type = "b")
 ```
 
 In this case, the most complex tree  under consideration is selected by cross-validation. However, if we wish to prune the tree, we could do so as follows, using the `prune.tree()` function:
 
 ```{r chunk17}
-prune.boston <- prune.tree(tree.boston, best = 5)
-plot(prune.boston)
-text(prune.boston, pretty = 0)
+prune.heart <- prune.tree(tree.heart, best = 5)
+plot(prune.heart)
+text(prune.heart, pretty = 0)
+
+prune.hitters <- prune.tree(tree.hitters, best = 5)
+plot(prune.hitters)
+text(prune.hitters, pretty = 0)
 ```
 
 In keeping with the cross-validation results, we use the unpruned tree to make predictions on the test set.
 
 ```{r chunk18}
-yhat <- predict(tree.boston, newdata = Boston[-train, ])
-boston.test <- Boston[-train, "medv"]
-plot(yhat, boston.test)
+yhat <- predict(tree.heart, newdata = Heart[-train_heart, ])
+heart.test <- Heart[-train_heart, "Age"]
+plot(yhat, heart.test)
 abline(0, 1)
-mean((yhat - boston.test)^2)
+mean((yhat - heart.test)^2)
+
+yhat <- predict(tree.hitters, newdata = Hitters[-train_hitters, ])
+hitters.test <- Hitters[-train_hitters, "AtBat"]
+plot(yhat, hitters.test)
+abline(0, 1)
+mean((yhat - hitters.test)^2)
 ```
 
 In other words, the  test set MSE associated with the regression tree is $35.29$.
