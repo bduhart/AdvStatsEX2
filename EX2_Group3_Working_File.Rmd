@@ -15,11 +15,11 @@ jupyter:
 ---
 
 # Group 3 
-
+```{r chunk0}
 # Data insertion-BD
 Heart<- read.csv("Heart.csv")
 Hitters<- read.csv("Hitters.csv")
-
+```
 
 ## Fitting Classification Trees
 
@@ -250,162 +250,686 @@ The square root of the MSE is therefore around $5.941$, indicating that this mod
 
 
 
-
-Here we apply bagging and random forests to the `Boston` data, using the `randomForest` package in `R`. The exact results obtained in this section may depend on the version of `R` and the version of the `randomForest` package installed on your computer.
-Recall that bagging is simply a special case of a random forest with
-$m=p$. Therefore, the
-`randomForest()` function can be used to perform both random forests and bagging.
-We perform bagging as follows:
-
-```{r chunk19}
-library(randomForest)
-set.seed(1)
-bag.boston <- randomForest(medv ~ ., data = Boston,
-    subset = train, mtry = 12, importance = TRUE)
-bag.boston
-```
-
-The argument `mtry = 12` indicates that all $12$ predictors should be considered for each split of the tree---in other words, that bagging should be done.
-How well does this bagged model perform on the test set?
-
-```{r chunk20}
-yhat.bag <- predict(bag.boston, newdata = Boston[-train, ])
-plot(yhat.bag, boston.test)
-abline(0, 1)
-mean((yhat.bag - boston.test)^2)
-```
-
-The test set MSE associated with the bagged regression tree is $23.42$, about two-thirds of that obtained using an optimally-pruned single tree.
-We could change the number of trees grown by `randomForest()` using the `ntree` argument:
-
-```{r chunk21}
-bag.boston <- randomForest(medv ~ ., data = Boston,
-    subset = train, mtry = 12, ntree = 25)
-yhat.bag <- predict(bag.boston, newdata = Boston[-train, ])
-mean((yhat.bag - boston.test)^2)
+```{r setup, message=FALSE, warning=FALSE}
+# Load libraries needed for Chapter 8 tree-based methods
+library(ISLR2)        # provides the Hitters dataset
+library(tree)         # for single regression/classification trees
+library(randomForest) # for bagging and random forests
+library(ggplot2)      # for plots
+library(dplyr)        # for data cleaning and transformation
+# Set a seed so results are reproducible
+set.seed(123)
+# Show code in report, hide package startup and warning messages
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 ```
 
 
-Growing a random forest proceeds in exactly the same way, except that we use a smaller value of the `mtry` argument. By default, `randomForest()` uses $p/3$ variables when building a random forest of regression trees, and $\sqrt{p}$ variables when building a random forest of classification trees. Here we use `mtry = 6`.
+---
 
-```{r chunk22}
-set.seed(1)
-rf.boston <- randomForest(medv ~ ., data = Boston,
-    subset = train, mtry = 6, importance = TRUE)
-yhat.rf <- predict(rf.boston, newdata = Boston[-train, ])
-mean((yhat.rf - boston.test)^2)
+# 8.3 Bagging and Random Forests
+
+## 8.3.0 Data Check and Modeling Assumptions
+
+Tree-based methods differ from the Chapter 3 and Chapter 7 models we studied earlier. Linear regression and logistic regression depend much more heavily on assumptions about functional form, and those methods often require more EDA to check linearity, variance patterns, and possible transformations. In contrast, tree-based methods partition the predictor space into regions and therefore do not require linearity, normality, or equal variance in the same way. For this reason, a full EDA section is not necessary here. Instead, the important checks are whether missing values are present, whether the response variable has the correct type, and whether categorical predictors are coded properly. This is consistent with the Chapter 8 framework, which emphasizes prediction through recursive partitioning and ensemble averaging rather than parametric assumptions. 
+
+For intuition, consider a situation in which salary increases quickly early in a career and then levels off. A linear model would need explicit nonlinear terms to capture that shape. A tree-based method can instead split the predictor space into career-stage intervals and assign different average predictions to each region. That is why tree-based methods usually need only a short data check rather than a full assumption-testing EDA section.
+
+---
+
+## A. Hitters dataset for Regression
+
+### 8.3.1 Load and Prepare the Hitters Data
+
+```{r hitters-data}
+# Load the Hitters dataset from ISLR2
+data(Hitters)
+
+# Inspect raw data - data types, missing values
+summary(Hitters)
+
+# Prepare data
+hitters <- Hitters %>%
+  na.omit() %>%
+  mutate(logSalary = log(Salary))
+# See number of variables
+ncol(hitters)
+# Number of complete observations after cleaning
+n <- nrow(hitters)
+
+# Create a 70/30 train-test split
+train_idx <- sample(1:n, size = floor(0.7 * n))
+hitters_train <- hitters[train_idx, ]
+hitters_test  <- hitters[-train_idx, ]
+
+# Count the number of predictors used in the bagging/RF model
+p_hitters <- ncol(hitters_train) - 2 # Subtract 2 because Salary (response) and logSalary (stable version of the same response) are not predictors
+p_hitters
 ```
 
-The test set MSE is $20.07$; this indicates that random forests yielded an improvement over bagging in this case.
+We use `na.omit()` because `randomForest()` does not handle missing values directly. If observations with missing predictor or response values are kept, the model fitting process can fail or produce inconsistent splits across trees. We define `logSalary = log(Salary)` because log transformation reduces skewness and stabilizes the spread of the response. This also matches the Chapter 8 lab setup for tree-based regression. Finally, we use a train-test split so that model performance is evaluated on test data rather than only on the training sample.
 
-Using the `importance()` function, we can view the importance of each variable.
+---
 
-```{r chunk23}
-importance(rf.boston)
+### 8.3.2 Why Bagging Uses `mtry = p`
+
+Bagging is the special case of random forests in which **all predictors are considered at every split**. In `randomForest()`, this means setting `mtry = p`, where `p` is the total number of predictors. Random forests only use a smaller `mtry`, which reduces correlation among trees and often improves prediction.
+
+---
+
+### 8.3.3 Single Regression Tree Baseline
+
+```{r hitters-single-tree}
+# Fit a single regression tree as the baseline model
+# We predict logSalary and remove Salary from the predictor set
+hitters_tree <- tree(logSalary ~ . - Salary, data = hitters_train)
+
+# Model summary
+summary(hitters_tree)
+
+# Plot the fitted tree
+plot(hitters_tree)
+# Add split labels and terminal node predictions to the tree plot
+text(hitters_tree, pretty = 0)
+
+# Predict on the test set
+hitters_tree_pred <- predict(hitters_tree, newdata = hitters_test)
+
+# Compute test MSE for the single tree
+hitters_tree_mse <- mean((hitters_test$logSalary - hitters_tree_pred)^2)
+hitters_tree_mse
 ```
 
-Two measures of variable importance are reported. The first is based upon the mean decrease of accuracy in predictions on the out of bag samples when a given variable is permuted. The second is a measure of the total decrease in node impurity that results from splits over that variable, averaged over all trees (this was plotted in Figure 8.9). In the case of regression trees, the node impurity is measured by the training RSS, and for classification trees by the deviance. Plots of these importance measures can be produced using the `varImpPlot()` function.
+We use the single tree as our baseline model because it is easy to visualize and interpret. The tree selects variables such as `CAtBat`, `CRuns`, `AtBat`, `Walks`, `CRBI`, and `Runs`, indicating that both accumulated career performance and current-season performance contribute to salary prediction. However, a single tree is a **high-variance** learner: small changes in the training data can lead to different splits, different tree shapes, and noticeably different predictions. Its test MSE of 0.2307 therefore provides a useful benchmark for comparison with bagging and random forest.
 
-```{r chunk24}
-varImpPlot(rf.boston)
+---
+
+### 8.3.4 Bagging for Hitters
+
+```{r hitters-bagging}
+# Fit a bagging model using randomForest()
+set.seed(1234)
+hitters_bag <- randomForest(
+  logSalary ~ . - Salary,
+  data = hitters_train,
+  mtry = p_hitters,
+  ntree = 500,
+  importance = TRUE
+)
+
+# Show model information, including OOB statistics
+hitters_bag
+
+# Predict on the test set
+hitters_bag_pred <- predict(hitters_bag, newdata = hitters_test)
+
+# Compute test MSE
+hitters_bag_mse <- mean((hitters_test$logSalary - hitters_bag_pred)^2)
+hitters_bag_mse
 ```
 
-The results indicate that across all of the trees considered in the random forest, the wealth of the community (`lstat`) and the house size (`rm`) are by far the two most important variables.
+In bagging, all predictors are considered at every split, so `mtry = p` reproduces the bagging procedure. With 500 trees, the bagged model reduces the test MSE to 0.1970, improving over the single tree. This is consistent with Chapter 8: averaging many high-variance trees reduces variance and usually improves predictive stability. Although 500 trees is a common practical default because large forests tend to stabilize prediction error, our additional `ntree` analysis shows that the lowest observed test MSE in the tested grid occurs at 30 trees (0.1903), while larger forests such as 500 and 800 trees produce very similar but not strictly better results in this result.
+
+```{r hitters-bagging-wider-ntree}
+set.seed(1234)
+ntree_candidates_hitters <- c(10, 30, 50, 100, 150, 200, 300, 500, 800)
+
+hitters_bag_ntree_results <- data.frame(
+  ntree = integer(),
+  test_mse = numeric(),
+  oob_mse = numeric()
+)
+
+for (nt in ntree_candidates_hitters) {
+  
+  bag_model <- randomForest(
+    logSalary ~ . - Salary,
+    data = hitters_train,
+    mtry = p_hitters,   # bagging
+    ntree = nt,
+    importance = FALSE
+  )
+  
+  pred <- predict(bag_model, newdata = hitters_test)
+  test_mse <- mean((hitters_test$logSalary - pred)^2)
+  oob_mse <- tail(bag_model$mse, 1)
+  
+  hitters_bag_ntree_results <- rbind(
+    hitters_bag_ntree_results,
+    data.frame(
+      ntree = nt,
+      test_mse = test_mse,
+      oob_mse = oob_mse
+    )
+  )
+}
+
+hitters_bag_ntree_results
+```
+
+The `ntree` sensitivity analysis shows that bagging performance improves quickly once the ensemble contains more than a very small number of trees. In our tested grid, the lowest test MSE is 0.1903 at 30 trees, while the OOB MSE stabilizes around 200 trees and beyond. This suggests that the bagged ensemble becomes stable relatively early in this dataset. We still keep 500 trees as a reasonable reporting value because it is a standard large-forest setting and produces stable performance, but the results show that bagging did not require an extremely large ensemble to become effective here.
+
+```{r hitters-bagging-wider-ntree-MSE-comparison}
+set.seed(1234)
+hitters_bag_ntree_long <- rbind(
+  data.frame(
+    ntree = hitters_bag_ntree_results$ntree,
+    error = hitters_bag_ntree_results$test_mse,
+    metric = "Test MSE"
+  ),
+  data.frame(
+    ntree = hitters_bag_ntree_results$ntree,
+    error = hitters_bag_ntree_results$oob_mse,
+    metric = "OOB MSE"
+  )
+)
+
+ggplot(hitters_bag_ntree_long, aes(x = ntree, y = error, color = metric)) +
+  geom_line() +
+  geom_point() +
+  labs(
+    title = "Hitters Bagging: Error vs Number of Trees",
+    x = "Number of Trees",
+    y = "MSE",
+    color = "Metric"
+  )
+```
 
 
+---
 
+### 8.3.5 Random Forest `mtry` Tuning Loop for Hitters
+
+```{r hitters-mtry-loop}
+# Using random forest method, we can evaluate all possible values for mtry to show how random forest performance changes. This lets us visualize the tradeoff between tree strength and tree correlation
+set.seed(1234)
+
+# Try every possible mtry from 1 up to p
+mtry_grid_hitters <- 1:p_hitters
+
+# Create an empty results data frame
+hitters_rf_tuning <- data.frame(
+  mtry = integer(), # Records all possible number of trees
+  test_mse = numeric(), # Records prediction errors
+  oob_mse = numeric() # Records out-of-bag (OOB) errors
+)
+
+# Create an empty list to store fitted models
+hitters_rf_models <- list()
+
+# Loop through all candidate mtry values
+for (m in mtry_grid_hitters) {
+  
+  # Fit a random forest with the current mtry
+  rf_model <- randomForest(
+    logSalary ~ . - Salary,
+    data = hitters_train,
+    mtry = m,
+    ntree = 500,
+    importance = TRUE
+  )
+  
+  # Predict on the test set
+  pred <- predict(rf_model, newdata = hitters_test)
+  
+  # Compute test MSE
+  test_mse <- mean((hitters_test$logSalary - pred)^2)
+  
+  # Extract the final OOB MSE from the fitted forest
+  oob_mse <- tail(rf_model$mse, 1)
+  
+  # Store the results
+  hitters_rf_tuning <- rbind(
+    hitters_rf_tuning,
+    data.frame(mtry = m, test_mse = test_mse, oob_mse = oob_mse)
+  )
+  
+  # Save the model in case we want the best one later
+  hitters_rf_models[[paste0("mtry_", m)]] <- rf_model
+}
+hitters_rf_tuning
+
+# Identify the best mtry based on test MSE
+best_mtry_hitters <- hitters_rf_tuning$mtry[which.min(hitters_rf_tuning$test_mse)]
+best_rf_hitters <- hitters_rf_models[[paste0("mtry_", best_mtry_hitters)]]
+best_mtry_hitters # Best mtry
+min(hitters_rf_tuning$test_mse) # Best test MSE
+```
+
+For random forests, a common default in regression is to use approximately p/3 predictors at each split. With p=19, that rule would suggest an `mtry` near 6. However, rather than relying only on the default, we test all possible `mtry` values so that the performance pattern is explicit. The results show that the best test MSE is 0.1556 at `mtry = 2`, which is substantially better than bagging at `mtry = 19`. This indicates that in the Hitters dataset, reducing the number of predictors considered at each split greatly lowers tree correlation and improves ensemble prediction.
+
+---
+
+### 8.3.6 Plot: Hitters Test MSE vs `mtry`
+
+```{r hitters-mtry-plot}
+# Plot test MSE against mtry
+ggplot(hitters_rf_tuning, aes(x = mtry, y = test_mse)) +
+  geom_line() +
+  geom_point() +
+  labs(
+    title = "Hitters: Test MSE vs mtry",
+    x = "mtry",
+    y = "Test MSE"
+  )
+```
+
+The plot shows a clear minimum near `mtry = 2`. As `mtry` increases toward the bagging case, the test MSE rises, suggesting that trees become too similar when all predictors are always available. Thus, the random forest improves on bagging by balancing tree strength and tree diversity more effectively.
+
+---
+
+### 8.3.7 Variable Importance for Hitters
+
+```{r hitters-importance}
+# Plot variable importance for the best random forest model
+varImpPlot(best_rf_hitters, main = "Variable Importance: Random Forest for Hitters")
+```
+
+The variable importance plot reports two measures. `%IncMSE` measures how much prediction error increases when a variable is permuted, so larger values indicate that the model depends more strongly on that variable for accurate prediction. `IncNodePurity` measures the total reduction in node impurity contributed by that variable across the forest. In regression, node impurity is measured through reductions in residual sum of squares (RSS), so variables with larger `IncNodePurity` values are those that frequently create strong splits. In our results, the most important variables are `CAtBat`, `CRuns`, `CHits`, `CWalks`, and `CRBI`. These are cumulative career statistics, which makes substantive sense because long-term performance should be strongly related to salary.
+
+---
+
+### 8.3.8 Hitters Model Comparison
+
+```{r hitters-comparison}
+# Create a comparison table for the three main models
+hitters_model_comparison <- data.frame(
+  Model = c(
+    "Single Tree",
+    "Bagging (mtry = p)",
+    paste0("Random Forest (best mtry = ", best_mtry_hitters, ")")
+  ),
+  Test_MSE = c(
+    hitters_tree_mse,
+    hitters_bag_mse,
+    min(hitters_rf_tuning$test_mse)
+  )
+)
+hitters_model_comparison
+```
+
+The model comparison shows a clear improvement across the ensemble workflow. The single tree yields a test MSE of 0.2307, bagging reduces this to 0.1970, and the best random forest further reduces it to 0.1556. This pattern strongly supports the Chapter 8 argument that single trees have high variance, bagging reduces variance by averaging, and random forests can improve further by reducing correlation among trees.
+
+---
+
+## B. Heart — Classification
+
+### 8.3.9 Load and Prepare the Heart Data
+
+```{r heart-data}
+# Read the Heart dataset from CSV
+# Replace "Heart.csv" with your exact file name if needed
+heart <- read.csv("Heart.csv", stringsAsFactors = TRUE)
+
+# Remove rows with missing values and row index X
+heart <- na.omit(heart) %>% select(-X)
+# Check missing values
+colSums(is.na(heart))
+
+# Make sure the response is a factor for classification
+heart$AHD <- as.factor(heart$AHD)
+
+# Check structure
+str(heart)
+
+# Create a 70/30 train-test split
+set.seed(1234)
+n_heart <- nrow(heart)
+train_idx_heart <- sample(1:n_heart, size = floor(0.7 * n_heart))
+heart_train <- heart[train_idx_heart, ]
+heart_test  <- heart[-train_idx_heart, ]
+
+# Number of predictors
+p_heart <- ncol(heart_train) - 1
+p_heart
+```
+
+For classification, the key setup step is ensuring that the response variable is coded as a factor. This tells `randomForest()` to perform classification rather than regression. We also remove the row index column `X`, since it is not a meaningful predictor and should not influence the model. As in the Hitters analysis, we keep the data check brief because tree based methods do not require the same kind of full parametric assumption EDA used for linear or logistic models.
+
+---
+
+### 8.3.10 Single Classification Tree Base Model
+
+```{r heart-single-tree}
+# Fit a single classification tree
+heart_tree <- tree(AHD ~ ., data = heart_train)
+summary(heart_tree)
+plot(heart_tree)
+text(heart_tree, pretty = 0)
+
+# Predict class labels on the test set
+heart_tree_pred <- predict(heart_tree, newdata = heart_test, type = "class")
+
+# Confusion matrix
+heart_tree_tab <- table(Predicted = heart_tree_pred, Actual = heart_test$AHD)
+heart_tree_tab
+
+# Test classification error
+heart_tree_err <- mean(heart_tree_pred != heart_test$AHD)
+heart_tree_err
+```
+
+The single classification tree serves as an base model for interpretation. It selects variables such as `Thal`, `Ca`, `MaxHR`, `RestBP`, `Sex`, `Age`, `ChestPain`, `Chol`, and `Oldpeak`, all of which are clinically plausible predictors of heart disease. Its test error is 0.1889. Like regression trees, classification trees are **high variance learners** because a small change in the training sample can produce different splits and a different decision structure. This instability motivates the use of ensemble methods.
+
+---
+
+### 8.3.11 Bagging for Heart
+
+```{r heart-bagging}
+# Bagging for classification:
+set.seed(1234)
+heart_bag <- randomForest(
+  AHD ~ .,
+  data = heart_train,
+  mtry = p_heart,
+  ntree = 500,
+  importance = TRUE
+)
+heart_bag
+
+# Show model summary, including OOB error
+summary(heart_bag)
+
+# Predict classes on the test set
+heart_bag_pred <- predict(heart_bag, newdata = heart_test, type = "class")
+
+# Confusion matrix
+heart_bag_tab <- table(Predicted = heart_bag_pred, Actual = heart_test$AHD)
+heart_bag_tab
+
+# Test classification error
+heart_bag_err <- mean(heart_bag_pred != heart_test$AHD)
+heart_bag_err
+```
+
+In classification, bagging combines trees through majority vote. The out-of-bag (OOB) error provides an internal estimate of prediction error because each tree leaves part of the bootstrap sample unused, and those left-out observations can serve as validation cases for that tree. In our run, the bagged model has a test error of 0.2222, which is actually slightly worse than the single tree. Although bagging often improves unstable learners on average, this result shows that improvement is not guaranteed in every train-test split. It is therefore useful to compare bagging directly with random forest rather than assume monotonic improvement.
+
+---
+
+### 8.3.12 Random Forest `mtry` Tuning Loop for Heart
+
+```{r heart-mtry-loop}
+# Tune mtry for Heart classification
+set.seed(1234)
+
+# Try every possible mtry from 1 up to p
+mtry_grid_heart <- 1:p_heart
+
+# Empty results data frame
+heart_rf_tuning <- data.frame(
+  mtry = integer(),
+  test_error = numeric(),
+  oob_error = numeric()
+)
+
+# Empty list to store models
+heart_rf_models <- list()
+
+# Loop through all candidate mtry values
+for (m in mtry_grid_heart) {
+  
+  # Fit the random forest
+  rf_model <- randomForest(
+    AHD ~ .,
+    data = heart_train,
+    mtry = m,
+    ntree = 500,
+    importance = TRUE
+  )
+  
+  # Predict class labels
+  pred <- predict(rf_model, newdata = heart_test, type = "class")
+  
+  # Compute test error
+  test_error <- mean(pred != heart_test$AHD)
+  
+  # Extract final OOB error
+  oob_error <- tail(rf_model$err.rate[, "OOB"], 1)
+  
+  # Record results
+  heart_rf_tuning <- rbind(
+    heart_rf_tuning,
+    data.frame(mtry = m, test_error = test_error, oob_error = oob_error)
+  )
+  
+  # Save fitted model
+  heart_rf_models[[paste0("mtry_", m)]] <- rf_model
+}
+heart_rf_tuning
+
+# Best mtry based on test error
+best_mtry_heart <- heart_rf_tuning$mtry[which.min(heart_rf_tuning$test_error)]
+best_rf_heart <- heart_rf_models[[paste0("mtry_", best_mtry_heart)]]
+best_mtry_heart # Best mtry
+min(heart_rf_tuning$test_error) # Best test error
+```
+
+In classification, a common default is to use approximately \( \sqrt{p} \) predictors at each split. Since p=13 in the cleaned Heart dataset, that rule suggests an `mtry` near 3 or 4. However, we again test all possible values to make the performance pattern explicit. The lowest test error, 0.1778, is achieved at `mtry = 1`, and the same minimum also appears at `mtry = 2` and `mtry = 3`. As `mtry` increases, performance worse and approaches the bagging level. This pattern supports the random forest theory that smaller `mtry` values can improve prediction by reducing correlation among trees.
+
+---
+
+### 8.3.13 Plot: Heart Test Error vs `mtry`
+
+```{r heart-mtry-plot}
+# Plot Heart test error against mtry
+ggplot(heart_rf_tuning, aes(x = mtry, y = test_error)) +
+  geom_line() +
+  geom_point() +
+  labs(
+    title = "Heart: Test Error vs mtry",
+    x = "mtry",
+    y = "Test Error"
+  )
+```
+
+This plot shows how `mtry` values affect random forest classification performance and where the best predictive accuracy occurs.
+
+---
+
+### 8.3.14 Error vs Number of Trees for Heart
+
+```{r heart-ntree-loop}
+# Evaluate how error changes as the number of trees increases
+ntree_candidates <- c(10, 30, 50, 100, 150, 200, 300, 500, 800)
+
+# Empty results table
+heart_ntree_results <- data.frame(
+  ntree = integer(),
+  test_error = numeric(),
+  oob_error = numeric()
+)
+
+# Use the best mtry found above and vary ntree
+for (nt in ntree_candidates) {
+  
+  rf_model <- randomForest(
+    AHD ~ .,
+    data = heart_train,
+    mtry = best_mtry_heart,
+    ntree = nt,
+    importance = FALSE
+  )
+  
+  # Predict on test set
+  pred <- predict(rf_model, newdata = heart_test, type = "class")
+  
+  # Compute test error
+  test_err <- mean(pred != heart_test$AHD)
+  
+  # Final OOB error
+  oob_err <- tail(rf_model$err.rate[, "OOB"], 1)
+  
+  # Store results
+  heart_ntree_results <- rbind(
+    heart_ntree_results,
+    data.frame(ntree = nt, test_error = test_err, oob_error = oob_err)
+  )
+}
+heart_ntree_results
+
+# Best ntree value when using best mtry value
+best_ntree_heart <- heart_ntree_results$ntree[which.min(heart_ntree_results$test_error)]
+best_ntree_heart
+```
+
+We next examine how the number of trees affects performance while holding `mtry` at its best tuned value. In our tested grid, the lowest test error of 0.1556 occurs at 30 trees and again at 150 trees, while the OOB error reaches its lowest level by 300 trees and remains low at 800 trees. This indicates that the ensemble becomes reasonably stable once the forest is moderately large, although the exact best test error in this run may occur at a smaller `ntree` because of sampling variability. Therefore, 500 trees remains a common practical default because it provides a sufficiently large and stable forest, even if a smaller value may produce the absolute minimum error in a particular train-test split.
+
+```{r heart-ntree-plot}
+# Reshape results for plotting
+heart_ntree_long <- rbind(
+  data.frame(
+    ntree = heart_ntree_results$ntree,
+    error = heart_ntree_results$test_error,
+    type = "Test Error"
+  ),
+  data.frame(
+    ntree = heart_ntree_results$ntree,
+    error = heart_ntree_results$oob_error,
+    type = "OOB Error"
+  )
+)
+
+# Plot test and OOB error together
+ggplot(heart_ntree_long, aes(x = ntree, y = error, color = type)) +
+  geom_line() +
+  geom_point() +
+  labs(
+    title = "Heart: Error vs Number of Trees",
+    x = "Number of Trees",
+    y = "Error Rate",
+    color = "Metric"
+  )
+```
+
+This plot is useful because it shows whether the ensemble stabilizes as more trees are added. In Chapter 8, ensemble methods typically improve and then level off as `ntree` becomes large. This also helps justify why `ntree = 500` is a reasonable default.
+
+---
+
+### 8.3.15 Variable Importance for Heart
+
+```{r heart-importance}
+# Plot variable importance for the best Heart RF model
+varImpPlot(best_rf_heart, main = "Variable Importance: Random Forest for Heart")
+```
+
+For classification forests, the importance plot again reports two measures. `MeanDecreaseAccuracy` measures how much predictive accuracy falls when a variable is permuted, so larger values indicate stronger predictive importance. `MeanDecreaseGini` measures the total reduction in Gini impurity due to splits on that variable across the forest. **Gini impurity** reflects how mixed the classes are within a node; lower impurity means the node is more class-pure. Variables that strongly reduce Gini impurity therefore help separate the classes more effectively. In our results, the most important variables are `Ca`, `Thal`, `ChestPain`, `Oldpeak`, and `MaxHR`. These meaningful predictors supports the substantive validity of the model.
+
+---
+
+### 8.3.16 Heart Model Comparison
+
+```{r heart-comparison}
+# Compare single tree, bagging, and best random forest
+heart_model_comparison <- data.frame(
+  Model = c(
+    "Single Tree",
+    "Bagging (mtry = p)",
+    paste0("Random Forest (best mtry = ", best_mtry_heart, ")")
+  ),
+  Test_Error = c(
+    heart_tree_err,
+    heart_bag_err,
+    min(heart_rf_tuning$test_error)
+  )
+)
+heart_model_comparison
+```
+
+The model comparison shows that the best random forest provides the strongest predictive performance in this dataset. The single tree has a test error of 0.1889, bagging has a slightly worse error of 0.2222, and the best random forest reduces the error to 0.1778. Thus, while bagging does not improve the baseline in this particular run, random forest still delivers the best result by reducing correlation among trees through feature subsampling.
+
+---
+
+## 8.3.17 Bagging vs Random Forest: Theory and Concept Checklist
+
+```{r bagging-rf-checklist, echo=FALSE}
+bagging_rf_checklist <- data.frame(
+  Item = c(
+    "Base learner",
+    "Bootstrap sampling",
+    "Trees built independently",
+    "Uses all predictors at each split",
+    "Uses random subset of predictors at each split",
+    "Main goal",
+    "Relationship to mtry",
+    "Typical effect"
+  ),
+  Bagging = c(
+    "Decision trees",
+    "Yes",
+    "Yes",
+    "Yes",
+    "No",
+    "Reduce variance",
+    "mtry = p",
+    "Improves over a single tree by averaging"
+  ),
+  Random_Forest = c(
+    "Decision trees",
+    "Yes",
+    "Yes",
+    "No",
+    "Yes",
+    "Reduce variance more effectively",
+    "mtry < p",
+    "Often improves over bagging by reducing correlation"
+  )
+)
+bagging_rf_checklist
+```
+
+Bagging and random forests are similar because both use bootstrap samples and average many trees. Their key difference is that random forests restrict the predictor set at each split. This makes trees less correlated, and that usually improves the ensemble’s performance.
+
+---
+
+## 8.3.18 Practice Checklist Using Our Two Datasets
+
+```{r practice-checklist, echo=FALSE}
+practice_checklist <- data.frame(
+  Dataset = c("Hitters", "Heart"),
+  Response_Type = c("Regression", "Classification"),
+  Bagging_Result = c(
+    paste0("Test MSE = ", round(hitters_bag_mse, 4)),
+    paste0("Test Error = ", round(heart_bag_err, 4))
+  ),
+  RF_Result = c(
+    paste0("Best Test MSE = ", round(min(hitters_rf_tuning$test_mse), 4)),
+    paste0("Best Test Error = ", round(min(heart_rf_tuning$test_error), 4))
+  ),
+  Main_Lesson = c(
+    "RF slightly improves over bagging by reducing tree correlation",
+    "RF improves more clearly over bagging in classification"
+  )
+)
+practice_checklist
+```
+
+Using our two datasets as practice examples, for **Hitters** dataset, RF clearly improves over bagging by reducing tree correlation; for **Heart** dataset,RF improves over both bagging and the single tree, even though bagging alone does not improve the baseline. This indicates that the size of the improvement can differ by problem type and dataset structure.
+
+---
+
+## 8.3.19 Overall Model Improvement Across the Ensemble Workflow
+
+```{r overall-summary}
+overall_summary <- list(
+  Hitters = hitters_model_comparison,
+  Heart = heart_model_comparison
+)
+overall_summary
+```
+
+This final summary should make the model progression very clear: the overall results show that random forest performs best in both datasets, but the bagging step behaves differently across the two problems. In **Hitters**, prediction improves monotonically from single tree to bagging to random forest. In **Heart**, bagging performs slightly worse than the single tree, but random forest still achieves the lowest test error. This indicates that the main practical lesson of Chapter 8 is not that every ensemble step must always improve, but rather that random forests often outperform single trees and bagging because they combine variance reduction with tree decorrelation. 
+
+---
+
+## 8.3.20 Concluding Discussion
+
+Across both datasets, random forests produce the best predictive performance among the models considered. In the regression setting, the test MSE drops from 0.2307 for the single tree to 0.1970 for bagging and then to 0.1556 for the best random forest. In the classification setting, the single tree yields a test error of 0.1889, bagging gives 0.2222, and the best random forest reduces the error to 0.1778. These results illustrate the central Chapter 8 ideas: single trees are unstable and high-variance, bagging reduces variance by averaging many trees, and random forests often improve further by reducing correlation among trees through feature subsampling. The `mtry` tuning plots, `ntree` sensitivity analyses, and variable-importance plots make these theoretical ideas visible in practice.
+
+---
 
 ## Boosting
 
 
-Here we use the `gbm` package, and within it the `gbm()` function, to fit boosted regression trees to the `Boston` data set. We run `gbm()` with the option `distribution = "gaussian"` since this is a regression problem; if it were a binary classification problem, we would use `distribution = "bernoulli"`.
-The argument `n.trees = 5000` indicates that we want $5000$ trees, and the option `interaction.depth = 4` limits the depth of each tree.
-
-```{r chunk25}
-library(gbm)
-set.seed(1)
-boost.boston <- gbm(medv ~ ., data = Boston[train, ],
-    distribution = "gaussian", n.trees = 5000,
-    interaction.depth = 4)
-```
-
-The `summary()` function produces a relative influence plot and also outputs the relative influence statistics.
-
-```{r chunk26}
-summary(boost.boston)
-```
-
-We see that `lstat` and `rm` are by far the most important variables. We can also produce *partial dependence plots* for these two variables. These plots illustrate the marginal effect of the selected variables on the response after *integrating* out the other variables. In this case, as we might expect, median house prices are increasing with `rm` and decreasing with `lstat`.
-
-```{r chunk27}
-plot(boost.boston, i = "rm")
-plot(boost.boston, i = "lstat")
-```
-
-
-We now use the boosted model to predict `medv` on the test set:
-
-```{r chunk28}
-yhat.boost <- predict(boost.boston,
-    newdata = Boston[-train, ], n.trees = 5000)
-mean((yhat.boost - boston.test)^2)
-```
-
-The test MSE obtained is $18.39$: this is superior to the test MSE of random forests and bagging. If we want to, we can perform boosting with a different value of the shrinkage parameter $\lambda$ in (8.10). The default value is $0.001$, but this is easily modified.
-Here we take $\lambda=0.2$.
-
-```{r chunk29}
-boost.boston <- gbm(medv ~ ., data = Boston[train, ],
-    distribution = "gaussian", n.trees = 5000,
-    interaction.depth = 4, shrinkage = 0.2, verbose = F)
-yhat.boost <- predict(boost.boston,
-    newdata = Boston[-train, ], n.trees = 5000)
-mean((yhat.boost - boston.test)^2)
-```
-
-In this case, using $\lambda=0.2$ leads to a lower test MSE than $\lambda=0.001$.
-
-
-
-
-
 ## Bayesian Additive Regression Trees
-
-
-
-In this section  we use the `BART` package, and within it the `gbart()` function, to fit a Bayesian additive regression tree model to the `Boston` housing data set. The `gbart()` function  is
-designed for quantitative outcome variables. For binary outcomes,   `lbart()`  and  `pbart()`  are available.
-
-To run the `gbart()` function, we must first create matrices of predictors for the training and test data. We run BART with default settings.
-
-```{r chunk30}
-library(BART)
-x <- Boston[, 1:12]
-y <- Boston[, "medv"]
-xtrain <- x[train, ]
-ytrain <- y[train]
-xtest <- x[-train, ]
-ytest <- y[-train]
-set.seed(1)
-bartfit <- gbart(xtrain, ytrain, x.test = xtest)
-```
-
-Next we compute the test error.
-
-```{r chunk31}
-yhat.bart <- bartfit$yhat.test.mean
-mean((ytest - yhat.bart)^2)
-```
-
-
-On this data set, the test error of BART is lower than the test error of random forests and boosting.
-
-Now we can check how many times each variable appeared in the collection of trees.
-
-```{r chunk32}
-ord <- order(bartfit$varcount.mean, decreasing = T)
-bartfit$varcount.mean[ord]
-```
 
 
 
