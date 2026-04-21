@@ -15,6 +15,10 @@ jupyter:
 ---
 
 # Group 3 
+##Group-3 Exam 2
+###Introduction
+#The purpose of this project is to evaluate the 
+#
 ```{r chunk0}
 # Data insertion-BD
 Heart<- read.csv("Heart.csv")
@@ -28,6 +32,7 @@ The `tree` library is used to construct classification and regression trees.
 
 ```{r chunk1}
 library(tree)
+
 ```
 
 We first use classification trees  to analyze the `Carseats` data set.
@@ -928,16 +933,237 @@ Across both datasets, random forests produce the best predictive performance amo
 
 ## Boosting
 
+# Part 1: Boosting
 
-## Bayesian Additive Regression Trees
+## What is Boosting?
 
+Boosting is a sequential ensemble method. Unlike bagging and random forests, which build trees independently in parallel, boosting builds trees one at a time. Each new tree is fit to the residuals of the current ensemble, meaning it focuses its effort on the observations the previous trees predicted poorly. The final prediction is a weighted sum of all trees. Because each individual tree is kept deliberately small and the contribution of each tree is scaled down by a shrinkage parameter lambda, the model learns slowly and avoids overfitting. The three main tuning parameters are B (number of trees), lambda (shrinkage or learning rate), and d (interaction depth, which controls the number of splits per tree).
 
+---
 
+# 1. Boosting on Hitters Data: Default Lambda = 0.001
 
+```{r chunk9}
+set.seed(1)
+boost.hitters <- gbm(logSalary ~ . - Salary,
+                    data              = Hitters_train,
+                    distribution      = "gaussian",
+                    n.trees           = 5000,
+                    interaction.depth = 4)
+```
 
+We use distribution = "gaussian" because predicting log(Salary) is a regression problem and the model minimizes squared error loss. We exclude the raw Salary column from the formula using - Salary because it is the untransformed version of our response and would trivially predict it. We set n.trees = 5000 to give the model enough trees to converge at the small default shrinkage value of lambda = 0.001. The interaction.depth = 4 means each tree can have up to 4 splits, allowing the model to capture interactions among up to 4 variables at a time. With a small lambda, each tree contributes very little to the ensemble, so a large number of trees is needed to build up an accurate fit. This slow learning acts as a form of regularization and reduces the risk of overfitting.
 
+# 2. Relative Influence Plot
 
+```{r chunk10}
+summary(boost.hitters)
+```
 
+The `summary()` function for the `gbm` model gives both a relative influence table and a bar plot, which show how much each predictor contributed to reducing training loss across all 5000 trees. These values are expressed as percentages, so a larger relative influence means that the variable was used more often for splitting and made a stronger contribution to improving prediction accuracy.
 
+From the table and bar plot, **CRBI** (career RBIs) is by far the most influential predictor, with a relative influence of about **25.30%**. This is much larger than any other variable, which means career run production plays the strongest role in predicting salary in this boosting model. After CRBI, the next most important variables are **PutOuts (7.11%)**, **CHmRun (7.06%)**, **CHits (7.05%)**, **Assists (6.79%)**, **CWalks (6.76%)**, and **CRuns (5.94%)**. These variables still matter, but their influence is much lower compared to CRBI.
 
+The next group of variables includes **RBI (4.04%)**, **HmRun (3.99%)**, **Walks (3.88%)**, **Years (3.86%)**, **AtBat (3.62%)**, **CAtBat (3.59%)**, **Runs (3.46%)**, and **Hits (2.89%)**. These predictors contribute to the model, but they have a more moderate effect. At the lower end, **Errors (1.94%)**, **Division (1.13%)**, **League (1.06%)**, and **NewLeague (0.54%)** have relatively small influence, so they do not contribute much compared to the top variables.
 
+Overall, the plot shows that **career performance variables dominate the model**, especially career RBIs, career home runs, career hits, career walks, and career runs. This makes practical sense because player salaries are usually based more on long-term performance over a career than on just one recent season. The model also suggests that defensive and league-related variables matter much less than offensive career statistics when predicting salary.
+
+# 3. Partial Dependence Plots
+
+```{r chunk11}
+par(mfrow = c(1, 2))
+plot(boost.hitters, i = "CAtBat", main = "Partial Dependence: CAtBat")
+plot(boost.hitters, i = "CHits",  main = "Partial Dependence: CHits")
+par(mfrow = c(1, 1))
+```
+
+Partial dependence plots show the marginal effect of a single predictor on the response after averaging out the effects of all other variables. They are especially useful for interpreting boosting models because there are no direct coefficients like in linear regression. Each plot answers the question: holding all other variables constant, how does log(Salary) change as this predictor increases?
+
+From the CAtBat (career at-bats) plot, the relationship with log(Salary) is not strictly linear or steadily increasing. Initially, there is a slight increase in log(Salary) at lower values of CAtBat, followed by a sharp drop early on. After this, the relationship becomes somewhat positive again and increases up to around 2000 at-bats. However, beyond this point, the curve starts to decline and eventually flattens out after roughly 4000 at-bats. This suggests that while experience (measured through career at-bats) does help increase salary up to a certain point, the benefit does not continue indefinitely. At very high levels of experience, the effect stabilizes and may even slightly decrease, indicating diminishing returns.
+
+For CHits (career hits), the relationship is much more clearly positive compared to CAtBat. As CHits increases, log(Salary) increases steadily, especially in the lower to mid ranges. Around 400 to 800 hits, there is a noticeable jump in salary, indicating that reaching a certain performance threshold significantly impacts earnings. After around 900–1000 hits, the curve levels off, showing that additional hits still contribute but at a much smaller rate. This flattening suggests diminishing marginal returns for very high-performing players.
+
+Overall, both plots show nonlinear relationships with log(Salary). However, CHits has a more consistent positive effect, while CAtBat shows a more irregular pattern with an increase followed by stabilization. This indicates that actual performance (hits) is a stronger and more stable predictor of salary than just experience (at-bats), which aligns with how player value is typically assessed in practice.
+
+# 4. Test MSE with Default Lambda = 0.001
+
+```{r chunk12}
+yhat.boost <- predict(boost.hitters,
+                      newdata = Hitters_test,
+                      n.trees = 5000)
+mse_boost_default <- mean((yhat.boost - Hitters_test$logSalary)^2)
+mse_boost_default
+```
+
+We generate predictions on the test dataset using all 5000 trees and compute the mean squared error between the predicted and actual log salaries. The test MSE obtained is **0.2837507**.
+
+This value represents how far, on average, our predicted log(salary) values are from the actual values on unseen data. Since this is evaluated on the test set, it gives a good idea of how well the boosting model generalizes.
+
+A lower test MSE indicates better predictive performance. In this case, an MSE of around 0.284 suggests that the model is performing reasonably well, but there is still some prediction error present.
+
+This result will be used as a baseline for comparison. In the next steps, we will compare this value with models using different shrinkage (learning rate) values and also with BART in Part 2 to see if we can achieve further improvement.
+
+# 5. Boosting with Larger Lambda = 0.2
+
+```{r chunk13}
+boost.hitters <- gbm(logSalary ~ . - Salary,
+                    data              = Hitters_train,
+                    distribution      = "gaussian",
+                    n.trees           = 5000,
+                    interaction.depth = 4,
+                    shrinkage         = 0.2,
+                    verbose           = F)
+
+yhat.boost <- predict(boost.hitters,
+                      newdata = Hitters_test,
+                      n.trees = 5000)
+mse_boost_large <- mean((yhat.boost - Hitters_test$logSalary)^2)
+mse_boost_large
+```
+We refit the boosting model using a larger shrinkage value of λ = 0.2 and compute the test MSE, which is **0.3043822**.
+
+Compared to the previous MSE (0.2837507), the error has increased, indicating worse performance. This shows that using a larger learning rate can lead to overfitting or less stable predictions, even though the model learns faster.
+
+So, a smaller λ performs better in this case.
+
+---
+
+# 6. Boosting on Heart Data: Classification with Depth = 1
+
+```{r chunk14}
+set.seed(1)
+boost.heart.d1 <- gbm(AHD_01 ~ . - AHD,
+                      data              = Heart_train_b,
+                      distribution      = "bernoulli",
+                      n.trees           = 2000,
+                      interaction.depth = 1,
+                      shrinkage         = 0.01,
+                      verbose           = FALSE)
+```
+
+For the Heart classification problem we switch to distribution = "bernoulli", which tells gbm to minimize the binomial deviance (logistic loss) instead of squared error. The model internally predicts log-odds of heart disease, which we later convert to probabilities. We set interaction.depth = 1, meaning each tree is a single split, also called a decision stump. A stump produces a purely additive model where each predictor contributes independently. This is the simplest boosting configuration and is often very competitive because individual clinical risk factors such as chest pain type and the number of major vessels (Ca) are already strong independent predictors of heart disease.
+
+# 7. Boosting on Heart Data: Classification with Depth = 2
+
+```{r chunk15}
+set.seed(1)
+boost.heart.d2 <- gbm(AHD_01 ~ . - AHD,
+                      data              = Heart_train_b,
+                      distribution      = "bernoulli",
+                      n.trees           = 2000,
+                      interaction.depth = 2,
+                      shrinkage         = 0.01,
+                      verbose           = FALSE)
+```
+
+We also fit a model with interaction.depth = 2, which allows each tree to have up to 2 splits. This permits the model to capture pairwise interactions between predictors, for example the combined effect of age and maximum heart rate on disease risk. A deeper tree can capture more complex patterns but also introduces more variance. Comparing the test errors of the two depth settings tells us whether pairwise interactions add meaningful predictive value beyond individual predictors alone.
+
+# 8. Test Error for Both Depths
+
+```{r chunk16}
+prob_d1 <- predict(boost.heart.d1, Heart_test_b,
+                   n.trees = 2000, type = "response")
+
+pred_d1 <- factor(ifelse(prob_d1 > 0.5, "Yes", "No"), levels = levels(Heart_test$AHD))
+err_d1  <- mean(pred_d1 != Heart_test$AHD)
+cat("Boosting Test Error (depth=1):", round(err_d1, 4), "\n")
+
+prob_d2 <- predict(boost.heart.d2, Heart_test_b,
+                   n.trees = 2000, type = "response")
+pred_d2 <- factor(ifelse(prob_d2 > 0.5, "Yes", "No"), levels = levels(Heart_test$AHD))
+err_d2  <- mean(pred_d2 != Heart_test$AHD)
+cat("Boosting Test Error (depth=2):", round(err_d2, 4), "\n")
+```
+
+We compute the test error for both models with depth = 1 and depth = 2. In both cases, the test error is **0.1745**.
+
+Since both depths give the same error, increasing the tree depth does not improve performance. This suggests that most of the predictive signal is already captured by simpler trees, and adding interactions does not provide additional benefit in this case.
+
+---
+
+# Part 2: Bayesian Additive Regression Trees (BART)
+
+## What is BART?
+
+BART is a Bayesian nonparametric method that represents the prediction function as a sum of many small regression trees. Unlike boosting, which builds trees sequentially by minimizing a loss function, BART places prior distributions over the number, structure, and leaf values of each tree. It then uses Markov Chain Monte Carlo sampling to draw from the posterior distribution over all possible tree ensembles. The final prediction is the posterior mean, computed by averaging predictions across thousands of sampled ensembles. A key advantage of BART over boosting and random forests is that it requires no manual tuning. The priors automatically regularize the model by shrinking individual trees toward small, shallow structures, which prevents overfitting without the need for cross-validation to select hyperparameters.
+
+# 9. Prepare Data for BART
+
+```{r chunk17}
+x <- Hitters[, !(names(Hitters) %in% c("Salary", "logSalary"))]
+x <- model.matrix(~ . - 1, data = x)
+y <- Hitters[, "logSalary"]
+
+xtrain <- x[train_idx, ]
+ytrain <- y[train_idx]
+xtest  <- x[-train_idx, ]
+ytest  <- y[-train_idx]
+
+cat("Training predictor matrix:", dim(xtrain), "\n")
+cat("Test predictor matrix:    ", dim(xtest),  "\n")
+```
+
+BART requires all inputs to be numeric matrices. It cannot accept data frames that contain factor or character columns. We use model.matrix() to convert the Hitters predictors into a fully numeric matrix. This function automatically expands categorical variables such as League, Division, and NewLeague into binary dummy variables using one-hot encoding. We exclude raw Salary because it is the untransformed version of our response and we exclude logSalary because it is the response itself. We then split x and y using the same train_idx as before to ensure the evaluation is consistent with the boosting results above.
+
+# 10. Fit BART Model
+
+```{r chunk18}
+set.seed(1)
+bartfit <- gbart(xtrain, ytrain, x.test = xtest)
+```
+
+The gbart() function fits a BART model for a quantitative response. We pass the training predictor matrix and response vector, and we supply the test predictor matrix via x.test so that posterior predictions on the test set are computed as part of the MCMC run itself. The printed output shows the MCMC progress. The first 100 iterations are burn-in: during this phase the sampler is still converging toward the true posterior distribution and those samples are discarded. The subsequent 1000 iterations are retained. Each retained iteration corresponds to one complete sample of a full tree ensemble from the posterior. The prediction at each test point is the average of 1000 posterior predictions for that point, known as the posterior mean.
+
+# 11. BART Test MSE
+
+```{r chunk19}
+yhat.bart <- bartfit$yhat.test.mean
+mean((ytest - yhat.bart)^2)
+```
+
+We compute the test MSE for the BART model, which is **0.2270214**.
+
+This value is lower than the boosting test MSE (~0.284 with λ = 0.001 and ~0.304 with λ = 0.2), indicating that BART provides better predictive performance on unseen data. This means BART is able to capture the underlying relationship between predictors and log(Salary) more effectively.
+
+The improved performance comes from BART’s Bayesian framework, where predictions are averaged over many trees using MCMC samples. This helps reduce variance and prevents overfitting, unlike boosting which depends heavily on tuning parameters like shrinkage.
+
+Overall, BART achieves the best generalization among the models considered, making it the most accurate model for this dataset.
+
+# 12. Variable Usage Count in BART
+
+```{r chunk20}
+ord <- order(bartfit$varcount.mean, decreasing = T)
+bartfit$varcount.mean[ord]
+```
+
+The `varcount.mean` values show how often each predictor is used for splitting across all 1000 MCMC samples. A higher value indicates that the variable is consistently important in the model.
+
+From the results, **LeagueN (12.755)** is the most frequently used variable, followed by **Years (12.669)**, **LeagueA (12.209)**, **CHmRun (11.959)**, and **Assists (11.934)**. Other important variables include **DivisionW, NewLeagueN, RBI, and Hits**, all of which have relatively high usage counts.
+
+Performance-related variables such as **Walks, HmRun, CRuns, CHits, Runs, and CAtBat** also appear frequently, indicating that both career and current performance contribute to the model. Variables like **PutOuts, CRBI, CWalks, and AtBat** have slightly lower usage but still play a role.
+
+Overall, the model relies on a mix of league indicators, experience (Years), and performance statistics. This suggests that salary is influenced not only by player performance but also by league-related factors, and no single variable dominates across all trees.
+
+---
+```{r chunk21}
+cat("Boosting Test MSE (lambda = 0.001):", round(mse_boost_default, 6), "\n")
+
+cat("Boosting Test MSE (lambda = 0.2):", round(mse_boost_large, 6), "\n")
+
+mse_bart <- mean((ytest - yhat.bart)^2)
+cat("BART Test MSE:", round(mse_bart, 6), "\n")
+```
+
+# Summary and Comparison
+
+In this lab, we applied gradient boosting and BART to the Hitters regression problem and boosting to the Heart classification problem using the given datasets.
+
+For the Hitters data, boosting with the default learning rate (λ = 0.001) gave a test MSE of **0.2838**. Increasing the learning rate to λ = 0.2 actually increased the test MSE to **0.3044**, showing worse performance. This suggests that a smaller learning rate works better here, as it helps the model learn more gradually and generalize better.
+
+The relative influence results show that **CRBI** is the most important predictor, followed by variables like CHits, CHmRun, and Assists. The partial dependence plots also indicate that career performance variables have a strong impact on salary, although the relationships are nonlinear and tend to level off at higher values.
+
+For the Heart data, both depth = 1 and depth = 2 models gave the same test error (**0.1745**). This suggests that simple trees are already sufficient, and adding interactions does not improve performance.
+
+BART achieved the lowest test MSE (**0.2270**), outperforming boosting. This shows that BART provides better generalization, likely due to its Bayesian approach and averaging over many trees. The variable usage counts also show that multiple predictors are important, including **LeagueN, Years, CHmRun, Assists, and Hits**, indicating that both league-related factors and performance measures contribute to salary prediction.
+
+Overall, BART performed best for regression, while simpler boosting models were sufficient for classification.
